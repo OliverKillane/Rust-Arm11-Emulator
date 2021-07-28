@@ -23,7 +23,7 @@ const ORR : u32 = 12;
 const MOV : u32 = 13;
 
 /* register alias */
-const PC : u32 = 15;
+const PC : usize = 15;
 
 /* memory size (bytes) */
 const MEMSIZE : usize = 0x8000;
@@ -33,22 +33,16 @@ const MEMSIZE : usize = 0x8000;
 data    <-  Source string of bits
 start   <-  inclusive start
 n       <-  number of bits */
-fn get_bits(data : &u32, start : u32, n : u32) -> u32 {
-    (data >> start) & ((1 << n) - 1)
-}
+fn get_bits(data : &u32, start : u32, n : u32) -> u32 {(data >> start) & ((1 << n) - 1)}
 
 /* get bit at Location in a Word:
 data    <-  the Word you are inspecting
 n       <-  bit number (0-31) */
-fn get_bit(data : &u32, n : u32) -> bool {
-    (*data >> n) & 1 != 0
-}
+fn get_bit(data : &u32, n : u32) -> bool {(*data >> n) & 1 != 0}
 
 /* Check the endian-ness of the system the emulator is being run on
 return  <-  True (little endian), False (big endian) */
-fn endian_check() -> bool {
-    1u32.to_ne_bytes()[0] == 1
-}
+fn endian_check() -> bool {1u32.to_ne_bytes()[0] == 1}
 
 // MACHINE STATE STRUCTS========================================================
 struct Cpsr {
@@ -90,15 +84,6 @@ impl CPU {
         panic!();
     }
     
-    /* Get the value stored in a register  
-    reg     <-  register number (0-15) */
-    fn get_register(&self, reg : u32) -> u32 {self.registers[reg as usize]}
-    
-    /* Set the value of a given register
-    reg     <-  register number (0-15)
-    val     <-  value to store */
-    fn set_register(&mut self, reg: u32, val : u32) {self.registers[reg as usize] = val;}
-
     /* Get the word at a given memory location
     loc     <-  location of the start of the 4 bytes in memory */
     fn get_mem_word(&self, loc : usize) -> u32 {
@@ -135,11 +120,11 @@ impl CPU {
 
     // Run the main loop, fetching, decoding and executing instructions
     fn run_program(&mut self) {
-        self.registers[PC as usize] = 4;
+        self.registers[PC] = 4;
         let mut current_instruction;
 
         loop {
-            self.registers[PC as usize] += 4;
+            self.registers[PC] += 4;
             current_instruction = self.get_mem_word((self.registers[PC as usize] - 8) as usize);
 
             //println!("Current instruction is: {:#010x} and PC is: {}", current_instruction, self.registers[15]);
@@ -163,7 +148,7 @@ impl CPU {
                     self.fatal(format!("Error: Invalid instruction type: {:#010x}", current_instruction));
                 }
             } else {
-                println!("invalid condition");
+                //println!("invalid condition");
             }
         }
     }
@@ -172,10 +157,10 @@ impl CPU {
     fn print_state(&self) {
         println!("Registers:");
         for (ind, regval) in self.registers[..13].iter().enumerate() {
-            println!("${reg:<3}: {val:>10} ({val:#010x})", reg=ind, val=*regval);
+            println!("${reg:<3}: {val:>10} ({val:#010x})", reg=ind, val=*regval as i32);
         }
-        println!("PC  : {val:>10} ({val:#010x})", val=self.registers[PC as usize]);
-        println!("CPSR: {val:>10} ({val:#010x})", val=if self.cpsr.n {0x8000} else {0} + if self.cpsr.z {0x4000} else {0} + if self.cpsr.c {0x2000} else {0} + if self.cpsr.v {0x1000} else {0});
+        println!("PC  : {val:>10} ({val:#010x})", val=self.registers[PC as usize] as i32);
+        println!("CPSR: {val:>10} ({val:#010x})", val=(if self.cpsr.n {0x8000} else {0} + if self.cpsr.z {0x4000} else {0} + if self.cpsr.c {0x2000} else {0} + if self.cpsr.v {0x1000} else {0}) << 16);
         println!("Non-zero memory:");
         for loc in (0..MEMSIZE).step_by(4) {
             match (loc, self.get_mem_word(loc)) {
@@ -192,11 +177,9 @@ impl CPU {
         /* move the PC by a signed offset from bits 0-24, with -4 bytes 
         (for offset pipeline emulation to work) */
 
-        let change = (get_bits(instruction, 0, 23) as i32 - if get_bit(instruction, 23) {0x800001} else {1}) << 2;
+        let change = (get_bits(instruction, 0, 23) as i32 - if get_bit(instruction, 23) {0x800000} else {0} + 1) << 2;
 
-        println!("change: {}", change);
-
-        self.registers[PC as usize] = (self.registers[PC as usize] as i32 + change) as u32
+        self.registers[PC] = (self.registers[PC] as i32 + change) as u32
     }
 
     /* use condition bits of an instruction and the current cpsr to determine if an instruction should be executed */
@@ -214,17 +197,17 @@ impl CPU {
     }
 
     fn shift_operation(&mut self, instruction : &u32) -> (u32, bool) {
-        let rm = get_bits(instruction, 0, 4);
+        let rm = get_bits(instruction, 0, 4) as usize;
         if rm == PC {self.fatal(format!("Error: invalid shift uses PC as Rm: {:#010x}", instruction))}
 
-        let rm_value = self.get_register(rm);
+        let rm_value = self.registers[rm];
         let shift_amount = 
             if !get_bit(instruction, 4) {
                 /* <int>__0 case -> shift by immediate value */
                 get_bits(instruction, 7, 5)
             } else if !get_bit(instruction, 7) {
                 /* <RS>0__1 case -> shift specified by register */
-                self.get_register(get_bits(instruction, 8, 4))
+                self.registers[get_bits(instruction, 8, 4) as usize]
             } else {
                 self.fatal(format!("Error: Shift neither by constant, nor by register: {:#010x}", instruction));
                 panic!();
@@ -256,8 +239,8 @@ impl CPU {
     }
 
     fn single_data_transfer_instruction(&mut self, instruction: &u32) {
-        let rn_reg = get_bits(instruction, 16, 4);
-        let rd_reg = get_bits(instruction, 12, 4);
+        let rn_reg = get_bits(instruction, 16, 4) as usize;
+        let rd_reg = get_bits(instruction, 12, 4) as usize;
 
         let i = get_bit(instruction, 25);
         let p = get_bit(instruction, 24);
@@ -267,44 +250,44 @@ impl CPU {
         if PC == rd_reg {self.fatal( format!("Error: Data Transfer instruction uses PC as Rd: {:#010x}", instruction))};
 
         let offset = if i {
-            if get_bits(instruction, 0, 4) == rd_reg && !p {self.fatal(format!("Error: Data Transfer instruction uses same register as Rn, Rm: {:#010x}", instruction))};
+            if get_bits(instruction, 0, 4) as usize == rd_reg && !p {self.fatal(format!("Error: Data Transfer instruction uses same register as Rn, Rm: {:#010x}", instruction))};
             self.shift_operation(instruction).0
         } else {get_bits(instruction, 0, 12)} as i32 * if !u {-1} else {1};
 
         let memloc = if p {
-            (self.get_register(rn_reg) as i32 + offset) as u32
+            (self.registers[rn_reg] as i32 + offset) as u32
         } else {
-            let res = self.get_register(rn_reg);
-            self.set_register(rn_reg, (res as i32 + offset) as u32);
+            let res = self.registers[rn_reg];
+            self.registers[rn_reg] = (res as i32 + offset) as u32;
             res
         } as usize;
 
         if memloc == 0x20200008 || memloc == 0x20200004 || memloc == 0x20200000 {
             let region = ((memloc & 0xF) >> 2) * 10;
             println!("One GPIO pin from {} to {} has been accessed", region, region + 9);
-            if l {self.set_register(rd_reg, memloc as u32)}
+            if l {self.registers[rd_reg] = memloc as u32}
         } else if memloc == 0x20200028 && !l {println!("PIN OFF")} 
         else if memloc == 0x2020001C && !l {println!("PIN ON")}
         else if memloc < MEMSIZE - 4 {
-            if l {self.set_register(rd_reg, self.get_mem_word(memloc))}
-            else {self.set_mem_word(memloc, self.get_register(rd_reg))}
+            if l {self.registers[rd_reg] = self.get_mem_word(memloc)}
+            else {self.set_mem_word(memloc, self.registers[rd_reg])}
         } else {println!("Error: Out of bounds memory access at address {:#010x}", memloc)}
     }
 
     fn multiple_instruction(&mut self, instruction : &u32) {
-        let rd_reg = get_bits(instruction, 16, 4);
-        let rm_reg = get_bits(instruction, 0, 4);
-        let rs_reg = get_bits(instruction, 8, 4);
-        let rn_reg = get_bits(instruction, 12, 4);
+        let rd_reg = get_bits(instruction, 16, 4) as usize;
+        let rm_reg = get_bits(instruction, 0, 4) as usize;
+        let rs_reg = get_bits(instruction, 8, 4) as usize;
+        let rn_reg = get_bits(instruction, 12, 4) as usize;
 
         if rd_reg == rm_reg || rd_reg == PC || rm_reg == PC || rs_reg == PC ||  rn_reg == PC {self.fatal(format!("Error: Multiply instruction uses same register for Rd, Rm: {:#010x}", instruction))};
 
         let a = get_bit(instruction, 21);
         let s = get_bit(instruction, 20);
 
-        let result = self.get_register(rm_reg) * self.get_register(rs_reg) + if a {self.get_register(rn_reg)} else {0};
+        let result = self.registers[rm_reg] * self.registers[rs_reg] + if a {self.registers[rn_reg]} else {0};
 
-        self.set_register(rd_reg, result);
+        self.registers[rd_reg] = result;
 
         if s {  
             self.cpsr.n = get_bit(&result, 31);
@@ -314,8 +297,8 @@ impl CPU {
 
     fn process_data_instruction(&mut self, instruction : &u32) {
         let opcode = get_bits(instruction, 21, 4);
-        let rd_reg = get_bits(instruction, 12, 4);
-        let rn_val = self.get_register(get_bits(instruction, 16, 4));
+        let rd_reg = get_bits(instruction, 12, 4) as usize;
+        let rn_val = self.registers[get_bits(instruction, 16, 4) as usize];
 
         let i = get_bit(instruction, 25);
         let s = get_bit(instruction, 20);
@@ -329,15 +312,15 @@ impl CPU {
         let result = match opcode {
             TST | AND => rn_val & operand_2_value,
             TEQ | EOR => rn_val ^ operand_2_value,
-            CMP | SUB => rn_val - operand_2_value,
-            RSB => operand_2_value - rn_val,
+            CMP | SUB => (rn_val as i32 - operand_2_value as i32) as u32,
+            RSB => (operand_2_value as i32 - rn_val as i32) as u32,
             ADD => rn_val + operand_2_value,
             ORR => rn_val | operand_2_value,
             MOV => operand_2_value,
             _ => {self.fatal(format!("Error: Invalid operation in instruction: {:#010x}", instruction)); panic!()}
         };
 
-        if opcode != CMP && opcode != TEQ && opcode != TST {self.set_register(rd_reg, result);}
+        if opcode != CMP && opcode != TEQ && opcode != TST {self.registers[rd_reg] = result;}
 
         if s {
             self.cpsr.c = match opcode {
