@@ -142,20 +142,28 @@ impl CPU {
             self.registers[PC as usize] += 4;
             current_instruction = self.get_mem_word((self.registers[PC as usize] - 8) as usize);
 
+            //println!("Current instruction is: {:#010x} and PC is: {}", current_instruction, self.registers[15]);
+
             if current_instruction == 0 {break;}
 
             if self.check_condition(&current_instruction) {
-                if get_bits(&current_instruction, 24, 4) == 0b1100 {
+                if get_bits(&current_instruction, 24, 4) == 0b1010 {
+                    //println!("branch");
                     self.branch_instruction(&current_instruction);
                 } else if get_bits(&current_instruction, 26, 2) != 0 && get_bits(&current_instruction, 21, 2) == 0 {
+                    //println!("Single Data Transfer");
                     self.single_data_transfer_instruction(&current_instruction);
                 } else if get_bits(&current_instruction, 22, 6) == 0 && get_bits(&current_instruction, 4, 4) == 0b1001 {
+                    //println!("Multiply");
                     self.multiple_instruction(&current_instruction);
                 } else if get_bits(&current_instruction, 26, 2) == 0 {
+                    //println!("Data processing");
                     self.process_data_instruction(&current_instruction);
                 } else {
                     self.fatal(format!("Error: Invalid instruction type: {:#010x}", current_instruction));
                 }
+            } else {
+                println!("invalid condition");
             }
         }
     }
@@ -164,14 +172,15 @@ impl CPU {
     fn print_state(&self) {
         println!("Registers:");
         for (ind, regval) in self.registers[..13].iter().enumerate() {
-            print!("{reg:>3}: {val:010} ({val:#010x})", reg=ind, val=*regval);
+            println!("${reg:<3}: {val:>10} ({val:#010x})", reg=ind, val=*regval);
         }
-        print!("{reg:>3}: {val:010} ({val:#010x})", reg="PC", val=self.registers[PC as usize]);
-        print!("cpsr: {val:010} ({val:#010x})", val=if self.cpsr.n {0x8000} else {0} + if self.cpsr.z {0x4000} else {0} + if self.cpsr.c {0x2000} else {0} + if self.cpsr.v {0x1000} else {0});
+        println!("PC  : {val:>10} ({val:#010x})", val=self.registers[PC as usize]);
+        println!("CPSR: {val:>10} ({val:#010x})", val=if self.cpsr.n {0x8000} else {0} + if self.cpsr.z {0x4000} else {0} + if self.cpsr.c {0x2000} else {0} + if self.cpsr.v {0x1000} else {0});
+        println!("Non-zero memory:");
         for loc in (0..MEMSIZE).step_by(4) {
             match (loc, self.get_mem_word(loc)) {
                 (_,0) => (),
-                (loc, val) => println!("{loc:#010x}: {val:#010x}", loc=loc, val=val)
+                (loc, val) => println!("{loc:#010x}: {val:#010x}", loc=loc, val=val.to_be())
             }
         }
     }
@@ -182,12 +191,17 @@ impl CPU {
 
         /* move the PC by a signed offset from bits 0-24, with -4 bytes 
         (for offset pipeline emulation to work) */
-        self.set_register(14, (get_bits(instruction, 0, 23) - if get_bit(instruction, 23) {0x800001} else {1}) << 2)
+
+        let change = (get_bits(instruction, 0, 23) as i32 - if get_bit(instruction, 23) {0x800001} else {1}) << 2;
+
+        println!("change: {}", change);
+
+        self.registers[PC as usize] = (self.registers[PC as usize] as i32 + change) as u32
     }
 
     /* use condition bits of an instruction and the current cpsr to determine if an instruction should be executed */
     fn check_condition(&self, instruction: &u32) -> bool {
-        match *instruction {
+        match get_bits(instruction, 28, 4) {
             EQ => self.cpsr.z,
             NE => !self.cpsr.z,
             GE => self.cpsr.n == self.cpsr.v,
@@ -253,7 +267,7 @@ impl CPU {
         if PC == rd_reg {self.fatal( format!("Error: Data Transfer instruction uses PC as Rd: {:#010x}", instruction))};
 
         let offset = if i {
-            if self.get_register(get_bits(instruction, 0, 4)) == rd_reg && !p {self.fatal(format!("Error: Data Transfer instruction uses same register as Rn, Rm: {:#010x}", instruction))};
+            if get_bits(instruction, 0, 4) == rd_reg && !p {self.fatal(format!("Error: Data Transfer instruction uses same register as Rn, Rm: {:#010x}", instruction))};
             self.shift_operation(instruction).0
         } else {get_bits(instruction, 0, 12)} as i32 * if !u {-1} else {1};
 
@@ -309,7 +323,7 @@ impl CPU {
         let (operand_2_value, carryout) = if i {
             let rotate = get_bits(instruction, 8, 4) << 1;
             let immediate = get_bits(instruction, 0, 8);
-            ((immediate >> rotate) | (get_bits(&immediate, 0, rotate) << (32 - rotate)), if rotate > 0 {get_bit(&immediate, rotate - 1)} else {false})
+            (immediate.rotate_right(rotate), if rotate > 0 {get_bit(&immediate, rotate - 1)} else {false})
         } else {self.shift_operation(instruction)};
 
         let result = match opcode {

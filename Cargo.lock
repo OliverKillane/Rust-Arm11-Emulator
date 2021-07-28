@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "Arm11_emulator"
+name = "emulate"
 version = "0.1.0"
